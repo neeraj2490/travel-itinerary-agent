@@ -1,25 +1,33 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
+from pathlib import Path
 
 import groq
+from dotenv import dotenv_values
 from groq import APIConnectionError, APIError, RateLimitError
 from pydantic import ValidationError
 
 from schemas import TravelItinerary
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "openai/gpt-oss-20b"
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+
+
+def _load_api_key_from_env_file() -> str | None:
+    if not ENV_PATH.is_file():
+        return None
+    return dotenv_values(ENV_PATH).get("GROQ_API_KEY")
 
 
 class TravelItineraryAgent:
     def __init__(self, api_key: str | None = None) -> None:
-        key = api_key or os.environ.get("GROQ_API_KEY")
+        key = api_key or _load_api_key_from_env_file()
         if not key:
             print(
-                "Error: GROQ_API_KEY is not set. "
-                "Export it in your environment or copy .env.example to .env.",
+                "Error: GROQ_API_KEY is not set in .env. "
+                "Copy .env.example to .env and add your key.",
                 file=sys.stderr,
             )
             sys.exit(1)
