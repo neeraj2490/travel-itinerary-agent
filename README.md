@@ -90,7 +90,7 @@ python main.py \
 |------|----------|-------------|
 | `--source` | Yes | Departure city |
 | `--dest` | Yes (repeatable) | Destination city; pass once per city |
-| `--days` | Yes | Trip duration in days (must be > 0) |
+| `--days` | Yes | Total trip duration in days, split across all destinations (must be ≥ number of `--dest` values) |
 | `--budget` | Yes | One of: `budget`, `moderate`, `luxury` |
 
 View all options:

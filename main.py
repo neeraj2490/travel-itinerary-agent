@@ -20,7 +20,7 @@ def parse_args() -> argparse.Namespace:
         "--days",
         type=int,
         required=True,
-        help="Trip duration in days (must be > 0)",
+        help="Total trip duration in days, split across destinations (must be > 0)",
     )
     parser.add_argument(
         "--budget",

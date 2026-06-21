@@ -21,6 +21,39 @@ def _load_api_key_from_env_file() -> str | None:
     return dotenv_values(ENV_PATH).get("GROQ_API_KEY")
 
 
+def split_trip_days(total_days: int, num_destinations: int) -> list[int]:
+    """Split total trip days across destinations, giving extra days to earlier cities."""
+    base, remainder = divmod(total_days, num_destinations)
+    return [base + (1 if i < remainder else 0) for i in range(num_destinations)]
+
+
+def _destination_schema(destination_days: int) -> dict:
+    schema = TravelItinerary.model_json_schema()
+    schema["properties"]["trip_duration_days"] = {
+        "type": "integer",
+        "const": destination_days,
+        "description": "Days spent in this destination only",
+    }
+    schema["properties"]["daily_plan"]["minItems"] = destination_days
+    schema["properties"]["daily_plan"]["maxItems"] = destination_days
+    return schema
+
+
+def _parse_itinerary(
+    content: str, destination: str, destination_days: int
+) -> TravelItinerary:
+    data = json.loads(content)
+    data["trip_duration_days"] = destination_days
+
+    daily_plan = data.get("daily_plan")
+    if isinstance(daily_plan, list) and len(daily_plan) == destination_days:
+        for i, plan in enumerate(daily_plan):
+            if isinstance(plan, dict):
+                plan["day"] = i + 1
+
+    return TravelItinerary.model_validate(data)
+
+
 class TravelItineraryAgent:
     def __init__(self, api_key: str | None = None) -> None:
         key = api_key or _load_api_key_from_env_file()
@@ -37,26 +70,42 @@ class TravelItineraryAgent:
         self,
         source_city: str,
         destination: str,
-        trip_duration_days: int,
+        destination_days: int,
         budget_category: str,
+        total_trip_days: int,
+        all_destinations: list[str],
     ) -> list[dict[str, str]]:
+        if len(all_destinations) == 1:
+            trip_context = (
+                f"Plan a {total_trip_days}-day trip from {source_city} to {destination}."
+            )
+        else:
+            route = " -> ".join(all_destinations)
+            trip_context = (
+                f"Plan the {destination} leg of a {total_trip_days}-day multi-city trip "
+                f"from {source_city} visiting {route}. "
+                f"Allocate exactly {destination_days} days to {destination}."
+            )
+
         system_msg = {
             "role": "system",
             "content": (
                 "You are an expert travel planner. Return JSON matching the provided schema. "
-                f"The daily_plan array must contain exactly {trip_duration_days} entries, "
-                f"one per day numbered 1 through {trip_duration_days}. "
+                f"trip_duration_days must be {destination_days} — the number of days in "
+                f"{destination} only, not the full multi-city trip. "
+                f"The daily_plan array must contain exactly {destination_days} entries, "
+                f"numbered 1 through {destination_days}. "
                 f"Activities should be realistic for a {budget_category} budget."
             ),
         }
         user_msg = {
             "role": "user",
             "content": (
-                f"Plan a {trip_duration_days}-day trip from {source_city} to {destination}.\n"
+                f"{trip_context}\n"
                 f"Destination: {destination}\n"
-                f"Duration: {trip_duration_days} days\n"
+                f"Days in this city: {destination_days}\n"
                 f"Budget: {budget_category}\n"
-                "Include top attractions and a day-by-day activity plan."
+                "Include top attractions and a day-by-day activity plan for this city only."
             ),
         }
         return [system_msg, user_msg]
@@ -65,11 +114,18 @@ class TravelItineraryAgent:
         self,
         source_city: str,
         destination: str,
-        trip_duration_days: int,
+        destination_days: int,
         budget_category: str,
+        total_trip_days: int,
+        all_destinations: list[str],
     ) -> TravelItinerary:
         messages = self._build_messages(
-            source_city, destination, trip_duration_days, budget_category
+            source_city,
+            destination,
+            destination_days,
+            budget_category,
+            total_trip_days,
+            all_destinations,
         )
 
         try:
@@ -80,7 +136,7 @@ class TravelItineraryAgent:
                     "type": "json_schema",
                     "json_schema": {
                         "name": "travel_itinerary",
-                        "schema": TravelItinerary.model_json_schema(),
+                        "schema": _destination_schema(destination_days),
                     },
                 },
             )
@@ -101,7 +157,7 @@ class TravelItineraryAgent:
             )
 
         try:
-            return TravelItinerary.model_validate_json(content)
+            return _parse_itinerary(content, destination, destination_days)
         except json.JSONDecodeError as exc:
             snippet = content[:200]
             raise ValueError(
@@ -122,9 +178,23 @@ class TravelItineraryAgent:
         trip_duration_days: int,
         budget_category: str,
     ) -> list[TravelItinerary]:
+        if trip_duration_days < len(destinations):
+            print(
+                "Error: --days must be at least the number of destinations "
+                f"({len(destinations)}), got {trip_duration_days}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        day_allocations = split_trip_days(trip_duration_days, len(destinations))
         return [
             self.generate_itinerary(
-                source_city, dest, trip_duration_days, budget_category
+                source_city,
+                dest,
+                days,
+                budget_category,
+                trip_duration_days,
+                destinations,
             )
-            for dest in destinations
+            for dest, days in zip(destinations, day_allocations)
         ]
